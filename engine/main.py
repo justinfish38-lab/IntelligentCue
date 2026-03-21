@@ -2,15 +2,19 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 try:
+    from engine.domain import detect_domain
     from engine.entropy import analyze_entropy
     from engine.intent import detect_intent
     from engine.response import build_response
     from engine.routing import classify_route
+    from engine.seed import decode_seed, extract_seed, merge_seed_context
 except ModuleNotFoundError:
+    from domain import detect_domain
     from entropy import analyze_entropy
     from intent import detect_intent
     from response import build_response
     from routing import classify_route
+    from seed import decode_seed, extract_seed, merge_seed_context
 
 
 app = FastAPI(
@@ -22,6 +26,7 @@ app = FastAPI(
 
 class AnalyzeRequest(BaseModel):
     input: str = Field(..., min_length=1)
+    seed: str | None = None
 
 
 @app.get("/health")
@@ -31,18 +36,33 @@ def healthcheck() -> dict[str, str]:
 
 @app.post("/analyze")
 def analyze(payload: AnalyzeRequest) -> dict:
-    user_input = payload.input.strip()
+    inline_seed_value, user_input = extract_seed(payload.input.strip())
+    seed_value = payload.seed or inline_seed_value
+    seed_context = decode_seed(seed_value)
 
     intent_result = detect_intent(user_input)
+    domain_result = detect_domain(user_input, intent_result["intent"])
+    primary_domain = domain_result["primary_domain"]
+    secondary_domain = domain_result.get("secondary_domain")
+    domain_confidence = domain_result["confidence"]
     entropy_result = analyze_entropy(user_input, intent_result["intent"])
     route_result = classify_route(
         user_input,
         intent_result["intent"],
+        primary_domain,
         entropy_result["missing_data"],
+    )
+    intent_result, entropy_result, route_result = merge_seed_context(
+        user_input=user_input,
+        seed_context=seed_context,
+        intent_result=intent_result,
+        entropy_result=entropy_result,
+        route_result=route_result,
     )
 
     return build_response(
         user_input=user_input,
+        domain_result=domain_result,
         intent_result=intent_result,
         entropy_result=entropy_result,
         route_result=route_result,

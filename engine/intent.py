@@ -52,20 +52,85 @@ INTENT_RULES = {
             "art",
             "draw",
             "drawing",
+            "paint",
+            "painting",
+            "illustration",
+            "sketch",
             "music",
+            "guitar",
+            "piano",
             "write",
             "writing",
+            "poetry",
             "design",
             "creative",
             "practice",
             "improve",
+            "better",
+            "learn",
+            "study",
+            "skill",
+            "craft",
             "portfolio",
         },
         "patterns": [
             r"how do i get better",
+            r"want to get better",
             r"want to improve .* skill",
+            r"want to get better at",
+            r"how do i improve",
+            r"how can i improve",
+            r"learning .*",
             r"stuck .* creative",
             r"build a portfolio",
+        ],
+    },
+    "personal_growth": {
+        "keywords": {
+            "discipline",
+            "habit",
+            "habits",
+            "motivation",
+            "focus",
+            "confidence",
+            "mindset",
+            "routine",
+            "improve",
+            "progress",
+            "better",
+            "stuck",
+            "burnout",
+        },
+        "patterns": [
+            r"why am i not improving",
+            r"i keep falling behind",
+            r"how do i stay consistent",
+            r"i'm stuck",
+            r"not making progress",
+        ],
+    },
+    "life_direction_uncertainty": {
+        "keywords": {
+            "life",
+            "direction",
+            "career",
+            "path",
+            "future",
+            "purpose",
+            "choose",
+            "choice",
+            "decision",
+            "next",
+            "long term",
+            "lost",
+        },
+        "patterns": [
+            r"what should i do with my life",
+            r"not sure what to do",
+            r"don't know what to do",
+            r"which path should i take",
+            r"where should i go next",
+            r"i feel lost",
         ],
     },
     "product_market_validation": {
@@ -76,11 +141,13 @@ INTENT_RULES = {
             "validation",
             "mvp",
             "demand",
-            "audience",
             "users",
-            "problem",
             "fit",
             "customer",
+            "customers",
+            "sell",
+            "selling",
+            "business",
         },
         "patterns": [
             r"validate .* idea",
@@ -145,16 +212,35 @@ def _score_intent(lowered: str, tokens: set[str], rule: dict[str, Any]) -> int:
     return keyword_hits + (pattern_hits * 3)
 
 
+def _commercial_signal(tokens: set[str], lowered: str) -> bool:
+    commercial_keywords = {
+        "product",
+        "business",
+        "customer",
+        "customers",
+        "sell",
+        "selling",
+        "market",
+        "store",
+        "sales",
+    }
+    return bool(tokens.intersection(commercial_keywords)) or bool(
+        re.search(r"\b(product|business|customer|customers|sell|selling|market)\b", lowered)
+    )
+
+
 def detect_intent(user_input: str) -> dict[str, Any]:
     lowered = user_input.lower()
     normalized = re.sub(r"[^a-z0-9\s]", " ", lowered)
     tokens = set(normalized.split())
 
-    best_intent = "business_launch_uncertainty"
+    best_intent = "personal_growth"
     best_score = 0
 
     for intent, rule in INTENT_RULES.items():
         score = _score_intent(lowered, tokens, rule)
+        if intent == "product_market_validation" and not _commercial_signal(tokens, lowered):
+            score = 0
         if score > best_score:
             best_score = score
             best_intent = intent
@@ -166,11 +252,39 @@ def detect_intent(user_input: str) -> dict[str, Any]:
         elif any(word in tokens for word in {"launch", "business", "idea"}):
             best_intent = "business_launch_uncertainty"
             best_score = 2
-        elif any(word in tokens for word in {"creative", "design", "draw", "music"}):
+        elif any(
+            word in tokens
+            for word in {
+                "creative",
+                "design",
+                "draw",
+                "drawing",
+                "paint",
+                "painting",
+                "music",
+                "write",
+                "writing",
+                "learn",
+                "skill",
+                "improve",
+            }
+        ):
             best_intent = "creative_skill_development"
             best_score = 2
+        elif any(
+            word in tokens
+            for word in {"life", "direction", "career", "future", "path", "lost", "purpose"}
+        ):
+            best_intent = "life_direction_uncertainty"
+            best_score = 2
+        elif any(
+            word in tokens
+            for word in {"habit", "habits", "discipline", "focus", "confidence", "routine", "progress"}
+        ):
+            best_intent = "personal_growth"
+            best_score = 2
         else:
-            best_intent = "product_market_validation"
+            best_intent = "personal_growth"
             best_score = 1
 
     confidence = min(0.96, 0.52 + (best_score * 0.08))

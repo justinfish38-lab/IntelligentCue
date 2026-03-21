@@ -11,6 +11,25 @@ ROUTE_MAP = {
     "audience_growth_block": "audience_growth_pipeline",
 }
 
+INTENT_DOMAIN_MAP = {
+    "ecommerce_performance_failure": "business",
+    "business_launch_uncertainty": "business",
+    "creative_skill_development": "creative",
+    "personal_growth": "life",
+    "life_direction_uncertainty": "life",
+    "product_market_validation": "business",
+    "audience_growth_block": "business",
+}
+
+DOMAIN_ROUTE_MAP = {
+    "business": "business_context_pipeline",
+    "creative": "creative_context_pipeline",
+    "life": "life_context_pipeline",
+    "technical": "technical_context_pipeline",
+    "gaming": "gaming_context_pipeline",
+    "general": "general_context_pipeline",
+}
+
 
 def _calculate_cqu(
     impact: float,
@@ -27,9 +46,17 @@ def _calculate_cqu(
 def classify_route(
     user_input: str,
     intent: str,
+    domain: str,
     missing_data: list[str],
 ) -> dict[str, Any]:
-    route = ROUTE_MAP.get(intent, "validation_pipeline")
+    domain_route = DOMAIN_ROUTE_MAP.get(domain, "general_context_pipeline")
+    intent_route = ROUTE_MAP.get(intent)
+    intent_domain = INTENT_DOMAIN_MAP.get(intent)
+
+    if intent_route and (intent_domain is None or intent_domain == domain or domain == "general"):
+        route = intent_route
+    else:
+        route = domain_route
 
     if missing_data:
         route = f"{route}_with_entropy_reduction"
