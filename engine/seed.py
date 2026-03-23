@@ -65,8 +65,8 @@ def merge_seed_context(
     seed_context: dict[str, Any] | None,
     intent_result: dict[str, Any],
     entropy_result: dict[str, Any],
-    route_result: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    route_result: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
     if not seed_context:
         return intent_result, entropy_result, route_result
 
@@ -82,7 +82,7 @@ def merge_seed_context(
             "confidence": max(intent_result["confidence"], 0.78),
         }
 
-    current_route = route_result["route"]
+    current_route = route_result["route"] if route_result else None
     if current_route == "validation_pipeline_with_entropy_reduction" and seed_context.get("route"):
         route_result = {
             **route_result,

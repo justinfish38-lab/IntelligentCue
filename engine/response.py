@@ -4,12 +4,16 @@ from typing import Any
 
 try:
     from engine.behavior import detect_behavior
+    from engine.cognitive import detect_cognitive_level
     from engine.seed import encode_seed
     from engine.tone import detect_tone
+    from engine.verification import verify_output
 except ModuleNotFoundError:
     from behavior import detect_behavior
+    from cognitive import detect_cognitive_level
     from seed import encode_seed
     from tone import detect_tone
+    from verification import verify_output
 
 
 def _calculate_cqu(
@@ -24,223 +28,343 @@ def _calculate_cqu(
     return round((impact * reusability * observability * adaptivity) / cost, 2)
 
 
-def _base_response_text(intent: str, mode: str, primary_domain: str) -> str:
-    if intent == "ecommerce_performance_failure":
-        if mode == "push":
-            return (
-                "When a store is not getting sales, the issue usually sits in traffic, conversion, or offer fit, so the real job is finding the choke point rather than tinkering broadly. "
-                "If traffic is barely there, focus on visibility first and stop overvaluing store tweaks, and if people are visiting and still not buying, "
-                "treat it as a conversion, pricing, or offer problem until the numbers prove otherwise."
-            )
-        if mode == "redirect":
-            return (
-                "Focusing on the store itself is understandable when sales are weak, but the higher-probability issue is traffic or conversion, not cosmetic store changes. A stronger direction "
-                "is to decide whether the real failure is lack of qualified traffic or failure to convert the traffic you already have."
-            )
-        return (
-            "When a store is not getting sales, the problem is usually weak traffic, weak conversion, or weak offer fit, and the missing piece is figuring out which of those is actually failing. "
-            "If traffic is barely there, the focus should be visibility, not store tweaks yet, but if people are visiting and still not buying, the pressure "
-            "moves to conversion, pricing, or how compelling the offer feels."
-        )
+def _extract_subject_phrase(user_input: str, primary_domain: str) -> str:
+    lowered = user_input.lower()
+    subject_map = {
+        "music": "your music",
+        "painting": "your painting",
+        "paint": "your painting",
+        "art": "your art",
+        "drawing": "your drawing",
+        "draw": "your drawing",
+        "writing": "your writing",
+        "write": "your writing",
+        "store": "the store",
+        "shopify": "the store",
+        "etsy": "the Etsy shop",
+        "product": "the product",
+        "business": "the business",
+        "career": "your direction",
+        "life": "your direction",
+        "code": "the code",
+        "api": "the API",
+        "server": "the server",
+        "game": "your play",
+    }
+    for token, phrase in subject_map.items():
+        if token in lowered:
+            return phrase
 
-    if intent == "business_launch_uncertainty":
-        if mode == "push":
-            return (
-                "Most launch anxiety comes from trying to solve positioning, offer design, and go-to-market all at once, which usually means the business is still under-defined rather than bad. "
-                "The right move is to get the offer and buyer clear enough that a real person can react to it quickly, because brand polish and bigger plans are not the bottleneck yet."
-            )
-        if mode == "redirect":
-            return (
-                "Building the broader brand first can feel like progress, but the risk is staying too broad to get traction. A stronger direction is to narrow the buyer and offer until the value is obvious fast, then expand from there."
-            )
-        return (
-            "Most launch anxiety comes from trying to solve positioning, offer design, and go-to-market all at once, and that usually means the business is still under-defined, not automatically bad. "
-            "The right focus is getting the offer and buyer clear enough "
-            "that a real person can quickly say yes or no. Brand polish and bigger plans can wait until that part is solid."
-        )
+    fallback_map = {
+        "business": "what you're building",
+        "creative": "the work",
+        "life": "the situation",
+        "technical": "the system",
+        "gaming": "your play",
+    }
+    return fallback_map.get(primary_domain, "this")
 
-    if intent == "creative_skill_development":
-        if mode == "push":
-            return (
-                "When you keep practicing and the work still is not moving, the problem is rarely talent. It usually comes down to not being clear on what you're actually trying to improve, not seeing what is changing, or not practicing often enough, so tighten the focus first because more inspiration, more tools, or more browsing will not fix that."
-            )
-        if mode == "redirect":
-            return (
-                "When progress feels slow, taking in more input can feel productive, but that usually drifts you away from the real issue. A better direction is to get much clearer on what you're trying to improve and judge the work against that, because this looks more like a practice problem than an inspiration problem."
-            )
-        return (
-            "When you keep putting effort into a creative skill and the work is not improving, the gap is rarely raw talent. It is usually that you are not fully clear on what you're trying to improve, not seeing what is actually changing, or not practicing often enough, so the useful move is to narrow the focus rather than chase more inspiration because more tools or content will not fix a vague practice loop."
-        )
 
-    if intent == "product_market_validation":
-        if mode == "push":
-            return (
-                "When a product idea feels promising, the mistake is usually assuming demand instead of testing it, so the stronger move is validating pain "
-                "and buying intent before spending more energy on features. The useful question is not whether the idea sounds smart, but whether a "
-                "specific customer already feels the problem enough to move."
-            )
-        if mode == "redirect":
-            return (
-                "Building further can feel like the right move when you care about the product, but the bigger risk is building ahead of demand rather than building too little. A stronger direction is to look for evidence of pain and willingness to buy first, then let that shape the product."
-            )
-        return (
-            "Most product ideas fail before launch because demand was assumed instead of tested, and the useful question is not whether the idea sounds good but whether a specific customer already feels the problem. "
-            "The focus should be evidence of pain and buying intent first, not feature depth yet, because if demand is weak, building more usually just hides the real issue."
-        )
+def _cluster_phrase(cluster_name: str) -> str:
+    phrases = {
+        "commerce_outcome": "sales and store response",
+        "creative_work": "the work itself",
+        "creative_progress": "getting better at the work",
+        "traction_gap": "whether the work is actually reaching people",
+        "life_choice": "where to go next",
+        "personal_progress": "staying steady and moving forward",
+        "technical_break": "the part that keeps breaking",
+        "gaming_performance": "the part of play that keeps costing you",
+    }
+    return phrases.get(cluster_name, cluster_name.replace("_", " "))
 
-    if intent == "audience_growth_block":
-        if mode == "push":
-            return (
-                "When audience growth stalls, the issue is usually the channel, the angle, or the posting rhythm, so this points more toward a mismatch in how the content is reaching people than a vague quality issue. The first focus should be whether the distribution setup is working at all, because fine-tuning style comes later."
-            )
-        if mode == "redirect":
-            return (
-                "When growth is flat, refining the content itself is an understandable instinct, but this is more likely a distribution problem than a pure quality problem. A better direction is to fix how the content is reaching people first, because weak reach overwhelms creative quality early."
-            )
-        return (
-            "When audience growth stalls, the issue is usually the channel, the angle, or the posting rhythm, and until those are visible, "
-            "'make better content' is too vague to help. The first focus should be on whether the content is reaching the right people in the right way, because fine-tuning style "
-            "matters later; weak distribution usually overwhelms creative quality early on."
-        )
 
-    if primary_domain == "life" and mode == "redirect":
-        return (
-            "When several parts of life feel tangled together, keeping every option open can feel safer, but it usually keeps the real issue blurry. A stronger direction is to find the one pressure point that is shaping the rest and work from there."
-        )
-    if primary_domain == "life" and mode == "push":
-        return (
-            "When progress feels scattered, there is usually one pressure point carrying more weight than the others, so the useful move is to name that clearly and stop treating every problem as equally urgent."
-        )
+def _build_pattern_buffer(
+    user_input: str,
+    domain_result: dict[str, Any],
+    tone: str,
+    cognitive_level: str,
+    regeneration_index: int = 0,
+) -> dict[str, Any]:
+    subject = _extract_subject_phrase(user_input, str(domain_result["primary_domain"]))
+    clusters = domain_result.get("dominant_signal_clusters", [])[:3]
+    dominant_signal_clusters = [_cluster_phrase(cluster["name"]) for cluster in clusters]
+
+    lowered = user_input.lower()
+    outcome_phrase = "it still is not turning into much"
+    outcome_map = {
+        "nothing is happening": "it still is not leading anywhere",
+        "not growing": "it still is not growing",
+        "no results": "it still is not turning into real results",
+        "not working": "it still is not working",
+        "no sales": "it still is not turning into sales",
+        "no traction": "it still is not picking up",
+        "no progress": "it still is not moving forward",
+    }
+    for phrase, rewrite in outcome_map.items():
+        if phrase in lowered:
+            outcome_phrase = rewrite
+            break
+
+    return {
+        "primary_domain": str(domain_result["primary_domain"]),
+        "secondary_domain": domain_result.get("secondary_domain"),
+        "dominant_signal_clusters": dominant_signal_clusters,
+        "outcome_signal_present": bool(domain_result.get("outcome_priority")),
+        "emotional_tone": tone,
+        "cognitive_level": cognitive_level,
+        "subject": subject,
+        "outcome_phrase": outcome_phrase,
+        "variant": (sum(ord(char) for char in user_input) + regeneration_index) % 2,
+    }
+
+
+def _dynamic_opening(buffer: dict[str, Any]) -> str:
+    subject = buffer["subject"]
+    outcome_phrase = buffer["outcome_phrase"]
+    primary_domain = buffer["primary_domain"]
+    secondary_domain = buffer["secondary_domain"]
+    variant = buffer["variant"]
+
+    if primary_domain == "creative" and buffer["outcome_signal_present"]:
+        if secondary_domain == "business":
+            options = [
+                f"{subject.capitalize()} can get a good reaction and still end up where {outcome_phrase},",
+                f"People can respond well to {subject} and it still land in a place where {outcome_phrase},",
+            ]
+        else:
+            options = [
+                f"You can put real time into {subject} and still end up where {outcome_phrase},",
+                f"{subject.capitalize()} can matter a lot to you and still feel like {outcome_phrase},",
+            ]
+        return options[variant]
+
+    if primary_domain == "business":
+        options = [
+            f"{subject.capitalize()} can be active on the surface and still sit in a place where {outcome_phrase},",
+            f"You can keep putting effort into {subject} and still watch it stay in a place where {outcome_phrase},",
+        ]
+        return options[variant]
+
     if primary_domain == "life":
-        return (
-            "When life feels unclear, the problem is usually not a lack of options but too many unresolved pressures sitting on top of each other. The useful move is to get clear on what is actually pulling the most weight right now instead of trying to solve everything at once."
-        )
-    if primary_domain == "technical" and mode == "redirect":
-        return (
-            "When something technical keeps breaking, it is easy to keep patching the surface, but that usually drags the problem out. A stronger direction is to isolate the failing part first and let that drive the next move."
-        )
-    if primary_domain == "technical" and mode == "push":
-        return (
-            "When a technical problem keeps showing up, there is usually one failing piece underneath it, so the useful move is to isolate that point instead of making broad changes across the whole system."
-        )
+        options = [
+            "The situation can keep pulling in different directions without getting any clearer,",
+            "Circling the same decision for a while usually means something underneath it still has not been named cleanly,",
+        ]
+        return options[variant]
+
     if primary_domain == "technical":
-        return (
-            "When something technical is not working, the issue is usually narrower than it first appears. The useful move is to separate the failing part from everything around it, because that is what makes the next decision clearer."
-        )
-    if primary_domain == "gaming" and mode == "redirect":
-        return (
-            "When progress in a game feels flat, it is easy to keep changing everything at once, but that usually hides the real weakness. A better direction is to focus on the one part of play that is costing the most and build from there."
-        )
-    if primary_domain == "gaming" and mode == "push":
-        return (
-            "When improvement in a game stalls, there is usually one weak link doing most of the damage, so the useful move is to narrow in on that instead of overhauling everything."
-        )
+        options = [
+            f"{subject.capitalize()} can keep dropping out even after a few fixes,",
+            f"{subject.capitalize()} still being unstable after a few attempts usually means the fault is narrower than it first looks,",
+        ]
+        return options[variant]
+
     if primary_domain == "gaming":
-        return (
-            "When progress in a game stalls, the issue is usually one weak part of play showing up over and over rather than a general lack of ability. The useful move is to spot that pattern clearly before changing everything else."
-        )
-    if mode == "redirect":
-        return (
-            "Keeping multiple paths open can feel safer, but it usually spreads effort too thin and hides the real constraint, so a stronger direction is to find the factor actually shaping the result and let that determine the next move."
-        )
+        options = [
+            f"{subject.capitalize()} can keep slipping in the same places even when the hours are there,",
+            f"Putting more games in does not help much if {subject} keeps breaking down in the same moments,",
+        ]
+        return options[variant]
+
+    options = [
+        f"{subject.capitalize()} still feels stuck, and that usually means one part of it is not doing its part yet,",
+        f"{subject.capitalize()} not really moving yet usually comes down to one part of the situation dragging more than the others,",
+    ]
+    return options[variant]
+
+
+def _dynamic_diagnosis(intent: str, mode: str, buffer: dict[str, Any]) -> str:
+    primary_domain = buffer["primary_domain"]
+    secondary_domain = buffer["secondary_domain"]
+    subject = buffer["subject"]
+    outcome_signal_present = buffer["outcome_signal_present"]
+    clusters = buffer["dominant_signal_clusters"]
+    cluster_phrase = clusters[0] if clusters else "what is actually happening"
+
+    if primary_domain == "creative" and secondary_domain == "business" and outcome_signal_present:
+        if mode == "redirect":
+            return f"it makes sense to question {subject}, but what this usually means is that the work is getting some positive response and then dying before it reaches enough of the right people"
+        if mode == "push":
+            return f"the craft itself is probably not the main problem now, and this usually comes down to reach, consistency, or the work not being in front of the right people often enough"
+        return f"this usually means the work is good enough to get a reaction, but not visible enough or steady enough to turn into anything yet"
+
+    if intent == "ecommerce_performance_failure":
+        if mode == "redirect":
+            return "the surface details are easy to fixate on, but this usually comes down to people either not getting there in the first place, or getting there and not feeling ready to buy"
+        if mode == "push":
+            return "the slowdown is probably narrower than it looks, and most of the time it is traffic or buying hesitation, not store polish"
+        return "this is usually not the whole store failing at once, but people either not arriving in the right numbers or dropping off before they buy"
+
+    if primary_domain == "life":
+        if mode == "redirect":
+            return "keeping every option alive can feel safer, but most of the time that means the hardest tradeoff never gets faced directly"
+        if mode == "push":
+            return "one part of this is probably draining more energy than the rest, and that is usually the place deciding everything else"
+        return "this usually gets muddy because one decision is tied up with a few others, so nothing feels clean until that knot loosens"
+
+    if primary_domain == "technical":
+        if "internet" in subject or "connection" in subject:
+            return "this usually means either the router is dropping the connection or the line coming in is unstable"
+        return "this usually means one part is failing and everything around it is only feeling broken because of that"
+
+    if primary_domain == "gaming":
+        return "this usually comes down to one repeat mistake showing up over and over and costing more than the rest"
+
     if mode == "push":
+        return f"most of the time this comes back to {cluster_phrase}, and that is probably where things are breaking down"
+    if mode == "redirect":
+        return f"the first instinct is understandable, but this usually goes wrong around {cluster_phrase}"
+    return f"what this tends to mean is that {cluster_phrase} is where things are starting to stall"
+
+
+def _dynamic_direction(mode: str, buffer: dict[str, Any]) -> str:
+    primary_domain = buffer["primary_domain"]
+    secondary_domain = buffer["secondary_domain"]
+    outcome_signal_present = buffer["outcome_signal_present"]
+    subject = buffer["subject"]
+
+    if primary_domain == "creative" and secondary_domain == "business" and outcome_signal_present:
+        if mode == "redirect":
+            return f"so a better direction is to stop treating {subject} as the only variable and look harder at how it is reaching people, how often it is being seen, and what happens after people respond well to it"
+        if mode == "push":
+            return f"so I would treat this as a reach problem before I treated it as a talent problem"
+        return f"so I would look less at the work itself and more at how often the right people are actually seeing it"
+
+    if primary_domain == "business":
+        if mode == "redirect":
+            return "so the better move is to find where the path breaks instead of trying to improve everything at once"
+        if mode == "push":
+            return "so I would narrow in on the part between attention and purchase before touching anything cosmetic"
+        return "so I would look for the point where interest stops turning into action"
+
+    if primary_domain == "life":
+        if mode == "redirect":
+            return "so the better move is to name the one pressure you actually need to answer first and let the rest wait"
+        if mode == "push":
+            return "so I would stop treating every open question as equal and deal with the heaviest one first"
+        return "so getting clear on the hardest tradeoff will help more than trying to solve the whole future in one pass"
+
+    if primary_domain == "technical":
+        return "so I would check the part most likely to be failing before changing anything broader"
+
+    if primary_domain == "gaming":
+        return "so I would narrow in on that repeat mistake instead of overhauling everything"
+
+    return "so I would stay with the part that is falling short instead of spreading effort across everything else"
+
+
+def _apply_cognitive_level(response: str, level: str) -> str:
+    if level == "low":
         return (
-            "There is a real constraint shaping this outcome, and it is probably narrower than it feels right now, so the useful move is to identify it and stop spreading effort across everything else."
+            response.replace("conversion", "people seeing it but not buying")
+            .replace("distribution", "how it is reaching people")
+            .replace("traction", "results")
+            .replace("pricing", "price")
+            .replace("validation", "proof")
         )
+    if level == "high":
+        return response
     return (
-        "The situation has a real decision inside it, but the missing context still matters because once the baseline is clear, the right path usually becomes obvious much faster. The first priority is finding the constraint that is actually shaping the result, not improving everything at once."
+        response.replace("conversion", "people seeing it and not buying")
+        .replace("distribution", "reach")
     )
 
 
-def _response_text(intent: str, tone: str, mode: str, primary_domain: str) -> str:
-    base = _base_response_text(intent, mode, primary_domain)
+def _response_text(
+    user_input: str,
+    intent: str,
+    tone: str,
+    mode: str,
+    domain_result: dict[str, Any],
+    cognitive_level: str,
+    regeneration_index: int = 0,
+) -> str:
+    buffer = _build_pattern_buffer(
+        user_input,
+        domain_result,
+        tone,
+        cognitive_level,
+        regeneration_index,
+    )
+    opening = _dynamic_opening(buffer)
+    diagnosis = _dynamic_diagnosis(intent, mode, buffer)
+    direction = _dynamic_direction(mode, buffer)
+    base = f"{opening} {diagnosis}, {direction}."
 
     if tone == "casual":
-        return base.replace(
-            "This points more strongly toward",
-            "This points more toward",
+        base = base.replace(
+            "looks closer to where this is getting stuck",
+            "looks more like where this is getting stuck",
         )
 
-    if tone == "frustrated":
-        if intent == "ecommerce_performance_failure":
-            return (
-                "When a store is not getting sales, the problem is usually weak traffic, weak conversion, or weak offer fit, and that narrows it more than it may feel right now. If traffic is barely there, the real issue is visibility, not store tweaks yet, but if people are visiting and still not buying, the problem is much more likely conversion, pricing, or the offer itself."
-            )
-        return base.replace("The uncertainty usually means", "That usually means").replace(
-            "The situation has a real decision inside it, but the missing context still matters.",
-            "There is a real constraint here, even if it feels muddled right now.",
+    elif tone == "frustrated":
+        base = base.replace("it helps to", "what matters now is to")
+
+    elif tone == "uncertain":
+        base = base.replace(
+            "looks closer to where this is getting stuck",
+            "is probably closer to where this is getting stuck",
         )
 
-    if tone == "uncertain":
-        return base.replace(
-            "the problem is usually one of three things: weak traffic, weak conversion, or weak offer fit.",
-            "the problem is usually one of three things: weak traffic, weak conversion, or weak offer fit, and it is still too early to jump to the worst conclusion.",
-        ).replace(
-            "it's too early to blame the product.",
-            "it's too early to assume the product is the problem."
-        ).replace(
-            "The first priority is finding the constraint that is actually shaping the result, not improving everything at once.",
-            "The first priority is finding the constraint that is actually shaping the result, rather than trying to fix everything at once."
-        )
-
-    return base
+    return _apply_cognitive_level(base, cognitive_level)
 
 
 def _next_step(intent: str, missing_data: list[str]) -> str:
     if intent == "ecommerce_performance_failure":
         if "traffic source" in missing_data:
-            return "Where are your current visitors coming from: ads, organic search, social, email, or basically none?"
+            return "Where are people actually finding the store right now?"
         if "conversion rate" in missing_data:
-            return "What is your current conversion rate, or at least how many visitors it takes to get one sale?"
+            return "What tends to happen after people land there?"
         if "product type" in missing_data:
-            return "What exactly are you selling, and is it impulse-buy territory or something people compare carefully?"
+            return "What are you selling, and is it something people buy quickly or think about for a while?"
         if "pricing strategy" in missing_data:
-            return "How is the product priced relative to competitors, and are you leading with a discount, bundle, or full price?"
+            return "How is the price sitting compared with the other options people could choose?"
         if "marketing channel" in missing_data:
-            return "Which channel are you actually pushing hardest right now: Meta ads, TikTok, Google, email, or something else?"
+            return "Which channel is doing most of the work for you right now?"
 
     if intent == "business_launch_uncertainty":
         if "what you're trying to sell" in missing_data:
-            return "What are you actually planning to sell first: a product, a service, or something custom?"
+            return "What are you actually trying to put in front of people first?"
         if "who the buyer is" in missing_data:
-            return "Who is the first buyer you think would pay for this without needing a long explanation?"
+            return "Who do you think should care about this first?"
         if "what constraints you're operating under" in missing_data:
-            return "What constraints are real here: money, time, skill, or the fact that you need traction quickly?"
+            return "What is the real constraint here: time, money, skill, or something else?"
         if "how far along the launch is" in missing_data:
-            return "Are you still at idea stage, or have you already put an offer in front of real people?"
+            return "How far along is this really right now?"
 
     if intent == "creative_skill_development":
         if "which creative skill you're trying to improve" in missing_data:
-            return "Which skill are you trying to sharpen right now: writing, design, music, drawing, or something else specific?"
+            return "What part of the work are you actually trying to get better at?"
         if "what your current practice volume looks like" in missing_data:
-            return "How much focused practice are you actually getting in each week?"
+            return "How often are you really doing the work right now?"
         if "what outcome you're aiming for" in missing_data:
-            return "What are you trying to become better for: paid work, audience growth, portfolio quality, or personal mastery?"
+            return "What are you hoping the work starts doing for you?"
         if "where the actual bottleneck is" in missing_data:
-            return "Where do you feel the work falls apart right now: ideas, consistency, technique, or finishing?"
+            return "Where does it start to break down for you most often?"
 
     if intent == "product_market_validation":
         if "what problem the product solves" in missing_data:
-            return "What painful problem does this product solve strongly enough that someone would switch behavior for it?"
+            return "What real problem is this meant to solve for someone?"
         if "who the target customer is" in missing_data:
-            return "Who exactly is this for, and who is it definitely not for?"
+            return "Who is this really for?"
         if "what validation you've already run" in missing_data:
-            return "What have you already done to test demand: interviews, a landing page, preorders, or just intuition so far?"
+            return "What have you actually done so far to see if people want it?"
         if "whether anyone has shown buying intent" in missing_data:
-            return "Has anyone shown real buying intent yet, even if they have not paid you yet?"
+            return "Has anyone shown signs they would really pay for it?"
 
     if intent == "audience_growth_block":
         if "which platform matters most" in missing_data:
-            return "Which platform actually matters here: TikTok, YouTube, Instagram, X, LinkedIn, or email?"
+            return "Where is this work actually being seen right now?"
         if "what you're publishing right now" in missing_data:
-            return "What are you publishing now, in plain terms, and how often?"
+            return "What are you putting out there most often?"
         if "how consistent your output is" in missing_data:
-            return "How consistent has your output been over the last 30 days?"
+            return "How steady has the output really been lately?"
         if "what the current performance numbers look like" in missing_data:
-            return "What do the numbers look like right now: views, clicks, followers, or subscribers?"
+            return "What is the response looking like right now?"
 
     if missing_data:
-        return f"What can you tell me about {missing_data[0]}?"
+        return f"What have you actually seen so far around {missing_data[0]}?"
 
     return "What is the one number or signal that tells you this situation is not working?"
 
@@ -256,6 +380,7 @@ def build_response(
     route = route_result["route"]
     intent = intent_result["intent"]
     primary_domain = str(domain_result["primary_domain"])
+    cognitive_result = detect_cognitive_level(user_input)
     tone_result = detect_tone(user_input)
     behavior_result = detect_behavior(
         user_input=user_input,
@@ -263,6 +388,47 @@ def build_response(
         tone=str(tone_result["tone"]),
         missing_data=missing_data,
     )
+    response_text = _response_text(
+        user_input,
+        intent,
+        str(tone_result["tone"]),
+        str(behavior_result["mode"]),
+        domain_result,
+        str(cognitive_result["level"]),
+        0,
+    )
+    verification_result = verify_output(
+        response=response_text,
+        route=route,
+        domain_result=domain_result,
+        behavior_mode=str(behavior_result["mode"]),
+        missing_data=missing_data,
+    )
+    route = verification_result["route"]
+    response_text = verification_result["response"]
+    if verification_result["template_like"]:
+        response_text = _response_text(
+            user_input,
+            intent,
+            str(tone_result["tone"]),
+            str(behavior_result["mode"]),
+            domain_result,
+            str(cognitive_result["level"]),
+            1,
+        )
+        verification_result = verify_output(
+            response=response_text,
+            route=route,
+            domain_result=domain_result,
+            behavior_mode=str(behavior_result["mode"]),
+            missing_data=missing_data,
+        )
+        route = verification_result["route"]
+        response_text = verification_result["response"]
+    route_result = {
+        **route_result,
+        "route": route,
+    }
     seed = encode_seed(intent=intent, route=route, missing_data=missing_data)
 
     output_construct = {
@@ -299,12 +465,7 @@ def build_response(
         "confidence": intent_result["confidence"],
         "missing_data": missing_data,
         "route": route,
-        "response": _response_text(
-            intent,
-            str(tone_result["tone"]),
-            str(behavior_result["mode"]),
-            primary_domain,
-        ),
+        "response": response_text,
         "next_step": _next_step(intent, missing_data),
         "seed": seed,
         "cqf": {

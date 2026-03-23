@@ -44,26 +44,38 @@ def _calculate_cqu(
 
 
 def classify_route(
-    user_input: str,
     intent: str,
-    domain: str,
-    missing_data: list[str],
+    primary_domain: str,
+    secondary_domain: str | None,
+    outcome_signal_present: bool,
+    confidence: float,
+    entropy_data: list[str],
 ) -> dict[str, Any]:
-    domain_route = DOMAIN_ROUTE_MAP.get(domain, "general_context_pipeline")
+    domain_route = DOMAIN_ROUTE_MAP.get(primary_domain, "general_context_pipeline")
     intent_route = ROUTE_MAP.get(intent)
     intent_domain = INTENT_DOMAIN_MAP.get(intent)
 
-    if intent_route and (intent_domain is None or intent_domain == domain or domain == "general"):
+    if confidence < 0.50:
+        route = "general_context_pipeline"
+    elif (
+        outcome_signal_present
+        and primary_domain == "creative"
+        and secondary_domain == "business"
+    ):
+        route = "creative_traction_pipeline"
+    elif outcome_signal_present and primary_domain == "business":
+        route = "business_growth_pipeline"
+    elif outcome_signal_present and primary_domain == "creative":
+        route = "creative_traction_pipeline"
+    elif outcome_signal_present and intent_route == "skill_growth_pipeline":
+        route = "creative_traction_pipeline"
+    elif intent_route and (intent_domain is None or intent_domain == primary_domain or primary_domain == "general"):
         route = intent_route
     else:
         route = domain_route
 
-    if missing_data:
+    if entropy_data:
         route = f"{route}_with_entropy_reduction"
-
-    lowered = user_input.lower()
-    if any(word in lowered for word in ["translate", "rewrite", "convert"]):
-        route = "translation_pipeline"
 
     profile = {
         "S": 41,

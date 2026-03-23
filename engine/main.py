@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 try:
     from engine.domain import detect_domain
     from engine.entropy import analyze_entropy
+    from engine.interpretation import interpret_input, score_interpretation_confidence
     from engine.intent import detect_intent
     from engine.response import build_response
     from engine.routing import classify_route
@@ -11,6 +12,7 @@ try:
 except ModuleNotFoundError:
     from domain import detect_domain
     from entropy import analyze_entropy
+    from interpretation import interpret_input, score_interpretation_confidence
     from intent import detect_intent
     from response import build_response
     from routing import classify_route
@@ -40,24 +42,35 @@ def analyze(payload: AnalyzeRequest) -> dict:
     seed_value = payload.seed or inline_seed_value
     seed_context = decode_seed(seed_value)
 
+    interpretation_result = interpret_input(user_input)
     intent_result = detect_intent(user_input)
-    domain_result = detect_domain(user_input, intent_result["intent"])
+    intent_result = {
+        **intent_result,
+        "confidence": score_interpretation_confidence(
+            interpretation_result,
+            float(intent_result["confidence"]),
+        ),
+    }
+    domain_result = detect_domain(interpretation_result, intent_result["intent"])
     primary_domain = domain_result["primary_domain"]
     secondary_domain = domain_result.get("secondary_domain")
-    domain_confidence = domain_result["confidence"]
+    routed_confidence = float(intent_result["confidence"])
+    outcome_signal_present = bool(domain_result.get("outcome_priority"))
     entropy_result = analyze_entropy(user_input, intent_result["intent"])
-    route_result = classify_route(
-        user_input,
-        intent_result["intent"],
-        primary_domain,
-        entropy_result["missing_data"],
-    )
-    intent_result, entropy_result, route_result = merge_seed_context(
+    intent_result, entropy_result, _ = merge_seed_context(
         user_input=user_input,
         seed_context=seed_context,
         intent_result=intent_result,
         entropy_result=entropy_result,
-        route_result=route_result,
+        route_result=None,
+    )
+    route_result = classify_route(
+        intent=intent_result["intent"],
+        primary_domain=primary_domain,
+        secondary_domain=secondary_domain,
+        outcome_signal_present=outcome_signal_present,
+        confidence=routed_confidence,
+        entropy_data=entropy_result["missing_data"],
     )
 
     return build_response(
